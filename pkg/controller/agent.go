@@ -20,11 +20,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/hashicorp/yamux"
 	"github.com/nicocha30/ligolo-ng/pkg/protocol"
 	"github.com/nicocha30/ligolo-ng/pkg/proxy"
 )
+
+const maxAgentInfoStringLength = 256
 
 type LigoloAgent struct {
 	Name      string
@@ -35,6 +38,35 @@ type LigoloAgent struct {
 	Interface string
 	Running   bool
 	Listeners []*proxy.LigoloListener
+}
+
+func sanitizeAgentInfoString(value string) string {
+	var builder strings.Builder
+	count := 0
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		builder.WriteRune(r)
+		count++
+		if count >= maxAgentInfoStringLength {
+			break
+		}
+	}
+	return builder.String()
+}
+
+func sanitizeNetInterfaces(interfaces []protocol.NetInterface) []protocol.NetInterface {
+	out := make([]protocol.NetInterface, len(interfaces))
+	copy(out, interfaces)
+	for i := range out {
+		out[i].Name = sanitizeAgentInfoString(out[i].Name)
+		out[i].Addresses = make([]string, len(interfaces[i].Addresses))
+		for j, address := range interfaces[i].Addresses {
+			out[i].Addresses[j] = sanitizeAgentInfoString(address)
+		}
+	}
+	return out
 }
 
 func (la *LigoloAgent) Alive() bool {
@@ -144,13 +176,16 @@ func NewAgent(session *yamux.Session) (*LigoloAgent, error) {
 		return nil, fmt.Errorf("NewAgent: could not decode info reply: %v", err)
 	}
 
-	reply := protocolDecoder.Payload.(*protocol.InfoReplyPacket)
+	reply, err := protocol.PayloadAs[protocol.InfoReplyPacket](protocolDecoder.Payload)
+	if err != nil {
+		return nil, fmt.Errorf("NewAgent: could not decode info reply: %v", err)
+	}
 
 	return &LigoloAgent{
-		Name:      reply.Name,
-		Network:   reply.Interfaces,
+		Name:      sanitizeAgentInfoString(reply.Name),
+		Network:   sanitizeNetInterfaces(reply.Interfaces),
 		Session:   session,
-		SessionID: reply.SessionID,
+		SessionID: sanitizeAgentInfoString(reply.SessionID),
 		CloseChan: make(chan bool),
 	}, nil
 }

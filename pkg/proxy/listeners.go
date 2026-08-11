@@ -60,7 +60,11 @@ func NewListener(sess *yamux.Session, addr string, network string, to string) (L
 		conn.Close()
 		return LigoloListener{}, err
 	}
-	response := ligoloProtocol.Payload.(*protocol.ListenerResponsePacket)
+	response, err := protocol.PayloadAs[protocol.ListenerResponsePacket](ligoloProtocol.Payload)
+	if err != nil {
+		conn.Close()
+		return LigoloListener{}, err
+	}
 	if err := response.Err; err {
 		conn.Close()
 		return LigoloListener{}, errors.New(response.ErrString)
@@ -121,8 +125,12 @@ func (l *LigoloListener) Stop() error {
 
 	}
 
-	if err := ligoloProtocol.Payload.(*protocol.ListenerCloseResponsePacket).Err; err != false {
-		return errors.New(ligoloProtocol.Payload.(*protocol.ListenerCloseResponsePacket).ErrString)
+	response, err := protocol.PayloadAs[protocol.ListenerCloseResponsePacket](ligoloProtocol.Payload)
+	if err != nil {
+		return err
+	}
+	if err := response.Err; err != false {
+		return errors.New(response.ErrString)
 	}
 	return nil
 }
@@ -150,7 +158,10 @@ func (l *LigoloListener) relayTCP() error {
 		}
 
 		// We received a new BindResponse!
-		response := ligoloProtocol.Payload.(*protocol.ListenerBindReponse)
+		response, err := protocol.PayloadAs[protocol.ListenerBindReponse](ligoloProtocol.Payload)
+		if err != nil {
+			return err
+		}
 
 		if err := response.Err; err != false {
 			return errors.New(response.ErrString)
@@ -165,6 +176,7 @@ func (l *LigoloListener) relayTCP() error {
 				logrus.Error(err)
 				return
 			}
+			defer forwarderSession.Close()
 
 			forwarderProtocolEncDec := protocol.NewEncoderDecoder(forwarderSession)
 
@@ -179,8 +191,13 @@ func (l *LigoloListener) relayTCP() error {
 				logrus.Error(err)
 				return
 			}
-			if err := forwarderProtocolEncDec.Payload.(*protocol.ListenerSockResponsePacket).Err; err != false {
-				logrus.Error(forwarderProtocolEncDec.Payload.(*protocol.ListenerSockResponsePacket).ErrString)
+			sockResponse, err := protocol.PayloadAs[protocol.ListenerSockResponsePacket](forwarderProtocolEncDec.Payload)
+			if err != nil {
+				logrus.Error(err)
+				return
+			}
+			if err := sockResponse.Err; err != false {
+				logrus.Error(sockResponse.ErrString)
 				return
 			}
 			// If no error, establish TCP conn!

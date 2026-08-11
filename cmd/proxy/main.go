@@ -173,33 +173,50 @@ func main() {
 		for {
 			remoteConn := <-proxyController.Connection
 
-			yamuxConn, err := yamux.Client(remoteConn, nil)
-			if err != nil {
-				logrus.Errorf("could not create yamux client, error: %v", err)
-				continue
-			}
-
-			agent, err := controller.NewAgent(yamuxConn)
-			if err != nil {
-				logrus.Errorf("could not register agent, error: %v", err)
-				continue
-			}
-
-			logrus.WithFields(logrus.Fields{"remote": remoteConn.RemoteAddr(), "name": agent.Name, "id": agent.SessionID}).Info("Agent joined.")
-
-			if err := app.RegisterAgent(agent); err != nil {
-				logrus.Errorf("could not register agent: %s", err.Error())
-			}
-
-			go func() {
-				// Check agent status
-				for {
-					select {
-					case <-agent.Session.CloseChan(): // Agent closed
-						logrus.WithFields(logrus.Fields{"remote": remoteConn.RemoteAddr(), "name": agent.Name, "id": agent.SessionID}).Warnf("Agent dropped.")
-						return
+			func() {
+				var yamuxConn *yamux.Session
+				defer func() {
+					if r := recover(); r != nil {
+						logrus.Errorf("agent registration panicked: %v", r)
+						if yamuxConn != nil {
+							_ = yamuxConn.Close()
+						} else {
+							_ = remoteConn.Close()
+						}
 					}
+				}()
+
+				var err error
+				yamuxConn, err = yamux.Client(remoteConn, nil)
+				if err != nil {
+					logrus.Errorf("could not create yamux client, error: %v", err)
+					_ = remoteConn.Close()
+					return
 				}
+
+				agent, err := controller.NewAgent(yamuxConn)
+				if err != nil {
+					logrus.Errorf("could not register agent, error: %v", err)
+					_ = yamuxConn.Close()
+					return
+				}
+
+				logrus.WithFields(logrus.Fields{"remote": remoteConn.RemoteAddr(), "name": agent.Name, "id": agent.SessionID}).Info("Agent joined.")
+
+				if err := app.RegisterAgent(agent); err != nil {
+					logrus.Errorf("could not register agent: %s", err.Error())
+				}
+
+				go func() {
+					// Check agent status
+					for {
+						select {
+						case <-agent.Session.CloseChan(): // Agent closed
+							logrus.WithFields(logrus.Fields{"remote": remoteConn.RemoteAddr(), "name": agent.Name, "id": agent.SessionID}).Warnf("Agent dropped.")
+							return
+						}
+					}
+				}()
 			}()
 
 		}

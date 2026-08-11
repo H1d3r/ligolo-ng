@@ -73,7 +73,11 @@ func handleICMP(nstack *stack.Stack, localConn TunConn, yamuxConn *yamux.Session
 			return
 		}
 
-		reply := protocolDecoder.Payload.(*protocol.HostPingResponsePacket)
+		reply, err := protocol.PayloadAs[protocol.HostPingResponsePacket](protocolDecoder.Payload)
+		if err != nil {
+			logrus.Error(err)
+			return
+		}
 		if reply.Alive {
 			logrus.Debug("Host is alive, sending reply")
 			ProcessICMP(nstack, pkt)
@@ -228,6 +232,7 @@ func HandlePacket(nstack *stack.Stack, localConn TunConn, yamuxConn *yamux.Sessi
 
 	if err := protocolEncoder.Encode(connectPacket); err != nil {
 		logrus.Error(err)
+		_ = yamuxConnectionSession.Close()
 		return
 	}
 
@@ -236,10 +241,16 @@ func HandlePacket(nstack *stack.Stack, localConn TunConn, yamuxConn *yamux.Sessi
 		if err != io.EOF {
 			logrus.Error(err)
 		}
+		_ = yamuxConnectionSession.Close()
 		return
 	}
 
-	reply := protocolDecoder.Payload.(*protocol.ConnectResponsePacket)
+	reply, err := protocol.PayloadAs[protocol.ConnectResponsePacket](protocolDecoder.Payload)
+	if err != nil {
+		logrus.Error(err)
+		_ = yamuxConnectionSession.Close()
+		return
+	}
 	if reply.Established {
 		logrus.Debug("Connection established on remote end!")
 		go func() {
@@ -249,6 +260,7 @@ func HandlePacket(nstack *stack.Stack, localConn TunConn, yamuxConn *yamux.Sessi
 				if iperr != nil {
 					logrus.Error(iperr)
 					localConn.Terminate(true)
+					_ = yamuxConnectionSession.Close()
 					return
 				}
 				gonetConn := gonet.NewTCPConn(&wq, ep)
@@ -259,6 +271,7 @@ func HandlePacket(nstack *stack.Stack, localConn TunConn, yamuxConn *yamux.Sessi
 				if iperr != nil {
 					logrus.Error(iperr)
 					localConn.Terminate(false)
+					_ = yamuxConnectionSession.Close()
 					return
 				}
 

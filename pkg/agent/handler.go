@@ -352,7 +352,15 @@ func HandleConn(conn net.Conn) {
 		}
 		netConn := listenerConntrack[sockRequest.SockID]
 
-		if err := socketEncDec.Payload.(*protocol.ListenerSocketConnectionReady).Err; err != false {
+		ready, err := protocol.PayloadAs[protocol.ListenerSocketConnectionReady](socketEncDec.Payload)
+		if err != nil {
+			logrus.Error(err)
+			netConn.Close()
+			delete(listenerConntrack, sockRequest.SockID)
+			return
+		}
+
+		if err := ready.Err; err != false {
 			logrus.Debug("Socket relay session failed: error from proxy")
 			netConn.Close()
 			delete(listenerConntrack, sockRequest.SockID)
