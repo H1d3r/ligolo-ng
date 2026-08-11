@@ -18,8 +18,10 @@ package protocol
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 )
 
@@ -87,6 +89,61 @@ func TestConnectPacketsPreserveFramedUDPNegotiation(t *testing.T) {
 				t.Fatal("FramedUDP negotiation flag was lost")
 			}
 		})
+	}
+}
+
+func TestDecodeRejectsHugeDeclaredContainer(t *testing.T) {
+	var buffer bytes.Buffer
+	buffer.WriteByte(MessageInfoReply)
+	buffer.Write([]byte{
+		0x83,
+		0xa4, 'N', 'a', 'm', 'e',
+		0xa5, 'a', 'g', 'e', 'n', 't',
+		0xaa, 'I', 'n', 't', 'e', 'r', 'f', 'a', 'c', 'e', 's',
+		0xdd,
+	})
+	if err := binary.Write(&buffer, binary.BigEndian, uint32(MaxPacketSize+1)); err != nil {
+		t.Fatal(err)
+	}
+
+	decoder := NewDecoder(&buffer)
+	err := decoder.Decode()
+	if err == nil {
+		t.Fatal("expected an error for an oversized declared container")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected limit error, got %v", err)
+	}
+	if decoder.Payload != nil {
+		t.Fatal("payload should not be set after a rejected packet")
+	}
+}
+
+func TestDecodeRecoversFromMsgpackPanic(t *testing.T) {
+	packet := []byte{
+		MessageInfoReply,
+		0x83,
+		0xa4, 'N', 'a', 'm', 'e',
+		0xa5, 'a', 'g', 'e', 'n', 't',
+		0xaa, 'I', 'n', 't', 'e', 'r', 'f', 'a', 'c', 'e', 's',
+		0xa3, 'b', 'a', 'd',
+		0xa9, 'S', 'e', 's', 's', 'i', 'o', 'n', 'I', 'D',
+		0xa0,
+	}
+
+	decoder := NewDecoder(bytes.NewReader(packet))
+	err := decoder.Decode()
+	if err == nil {
+		t.Fatal("expected malformed slice field to return an error")
+	}
+	if !strings.Contains(err.Error(), "msgpack decoder panic") {
+		t.Fatalf("expected recovered panic error, got %v", err)
+	}
+}
+
+func TestPayloadAsRejectsUnexpectedPacketType(t *testing.T) {
+	if _, err := PayloadAs[InfoReplyPacket](&ConnectRequestPacket{}); err == nil {
+		t.Fatal("expected unexpected payload type error")
 	}
 }
 
